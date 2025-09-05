@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MP4 Player with Subtitle</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: rgb(61, 61, 61);}
+        video { width: 100vw; max-width: 1100px; margin-bottom: 16px; }
+        .controls { margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+    <h2>MP4 Player with Subtitle</h2>
+    <div class="controls">
+        <label>Chọn file MP4 và phụ đề (nhấn Ctrl/Shift để chọn nhiều file):
+            <input type="file" id="multiFile" multiple accept="video/mp4,.vtt,.srt,.crt">
+        </label>
+        <br>
+        <label>Chọn video:
+            <select id="videoSelect" disabled style="min-width:180px"></select>
+        </label>
+        <br>
+        <label>Chọn phụ đề:
+            <select id="subtitleSelect" disabled style="min-width:180px"></select>
+        </label>
+        <button id="translateBtn" disabled>Dịch phụ đề sang tiếng Việt</button>
+        <button id="downloadSubBtn" disabled>Tải phụ đề đã dịch</button>
+        <button id="rewindBtn" type="button">⏪ -10 giây</button>
+        <button id="forwardBtn" type="button">+10 giây ⏩</button>
+        <button id="playPauseBtn" type="button">⏯️ Play/Pause</button>
+    </div>
+    <video id="video" controls>
+        Your browser does not support the video tag.
+    </video>
+    <script>
+    function srtToVtt(srt) {
+        let vtt = 'WEBVTT\n\n';
+        vtt += srt
+            .replace(/\r+/g, '')
+            .replace(/^(\d+)$/gm, '')
+            .replace(/([0-9]{2}:[0-9]{2}:[0-9]{2}),([0-9]{3})/g, '$1.$2')
+            .replace(/\n{2,}/g, '\n\n');
+        return vtt;
+    }
+    let currentSubtitleText = '';
+    let currentSubtitleExt = '';
+    let currentSubtitleTrack = null;
+    function loadSubtitle(subFile, videoFileName) {
+        const ext = subFile.name.split('.').pop().toLowerCase();
+        currentSubtitleExt = ext;
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+            let vttText;
+            if (ext === 'vtt') {
+                vttText = ev.target.result;
+            } else if (ext === 'srt' || ext === 'crt') {
+                vttText = srtToVtt(ev.target.result);
+            } else {
+                alert('Unsupported subtitle format.');
+                return;
+            }
+            currentSubtitleText = vttText;
+            const vttBlob = new Blob([vttText], {type: 'text/vtt'});
+            const vttUrl = URL.createObjectURL(vttBlob);
+            const video = document.getElementById('video');
+            // Lưu lại trạng thái phát và thời điểm hiện tại
+            const wasPaused = video.paused;
+            const currentTime = video.currentTime;
+            // XÓA CHỈ track PHỤ ĐỀ, KHÔNG reset video element
+            let tracks = Array.from(video.children).filter(t => t.tagName === 'TRACK');
+            tracks.forEach(t => video.removeChild(t));
+            // Thêm track mới
+            const track = document.createElement('track');
+            track.kind = 'subtitles';
+            track.label = 'Subtitle';
+            track.srclang = 'en';
+            track.src = vttUrl;
+            track.default = true;
+            video.appendChild(track);
+            currentSubtitleTrack = track;
+            // Đảm bảo không reset video, chỉ set lại đúng thời điểm
+            if (Math.abs(video.currentTime - currentTime) > 0.1) video.currentTime = currentTime;
+            if (!wasPaused) video.play();
+            document.getElementById('translateBtn').disabled = false;
+        };
+        reader.readAsText(subFile);
+    }
+    document.getElementById('multiFile').addEventListener('change', function(e) {
+        const files = Array.from(e.target.files);
+        // Lọc danh sách video và phụ đề
+        let videoFiles = files.filter(f => f.name.match(/\.mp4$/i));
+        let subFiles = files.filter(f => f.name.match(/\.(vtt|srt|crt)$/i));
+        // Cập nhật dropdown video
+        const videoSelect = document.getElementById('videoSelect');
+        videoSelect.innerHTML = '';
+        if (videoFiles.length > 0) {
+            videoFiles.forEach((f, idx) => {
+                const opt = document.createElement('option');
+                opt.value = idx;
+                opt.textContent = f.name;
+                videoSelect.appendChild(opt);
+            });
+            videoSelect.disabled = false;
+        } else {
+            videoSelect.disabled = true;
+        }
+        // Cập nhật dropdown phụ đề dựa trên video đầu tiên (nếu có)
+        if (videoFiles.length > 0) {
+            videoSelect.selectedIndex = 0;
+            updateSubtitleDropdown(videoFiles[0], subFiles);
+            loadVideoAndSubtitle(videoFiles[0], subFiles);
+        } else {
+            document.getElementById('subtitleSelect').innerHTML = '';
+            document.getElementById('subtitleSelect').disabled = true;
+        }
+    });
+    // Khi chọn video từ dropdown
+    document.getElementById('videoSelect').addEventListener('change', function(e) {
+        const files = Array.from(document.getElementById('multiFile').files);
+        let videoFiles = files.filter(f => f.name.match(/\.mp4$/i));
+        let subFiles = files.filter(f => f.name.match(/\.(vtt|srt|crt)$/i));
+        let idx = this.selectedIndex;
+        if (videoFiles.length > 0 && idx >= 0) {
+            updateSubtitleDropdown(videoFiles[idx], subFiles);
+            loadVideoAndSubtitle(videoFiles[idx], subFiles);
+        }
+    });
+    // Khi chọn phụ đề từ dropdown
+    document.getElementById('subtitleSelect').addEventListener('change', function(e) {
+        const files = Array.from(document.getElementById('multiFile').files);
+        let videoFiles = files.filter(f => f.name.match(/\.mp4$/i));
+        let subFiles = files.filter(f => f.name.match(/\.(vtt|srt|crt)$/i));
+        let vIdx = document.getElementById('videoSelect').selectedIndex;
+        let sIdx = this.selectedIndex;
+        if (videoFiles.length > 0 && subFiles.length > 0 && sIdx >= 0) {
+            loadVideoAndSubtitle(videoFiles[vIdx], [subFiles[sIdx]]);
+        }
+    });
+    // Cập nhật dropdown phụ đề dựa trên video đang chọn
+    function updateSubtitleDropdown(videoFile, subFiles) {
+        const select = document.getElementById('subtitleSelect');
+        select.innerHTML = '';
+        if (!videoFile) { select.disabled = true; return; }
+        const baseName = videoFile.name.replace(/\.[^/.]+$/, '');
+        // Lọc phụ đề cùng tên hoặc cùng tên + _vi
+        let filteredSubs = subFiles.filter(f => {
+            const subBase = f.name.replace(/\.[^/.]+$/, '');
+            return subBase === baseName || subBase === baseName + '_vi';
+        });
+        // Nếu không có thì lấy tất cả phụ đề
+        if (filteredSubs.length === 0) filteredSubs = subFiles;
+        filteredSubs.forEach((f, idx) => {
+            const opt = document.createElement('option');
+            opt.value = idx;
+            opt.textContent = f.name;
+            select.appendChild(opt);
+        });
+        select.disabled = filteredSubs.length === 0;
+        // Tự động chọn ưu tiên: _vi, rồi cùng tên gốc, rồi đầu tiên
+        let autoIdx = filteredSubs.findIndex(f => f.name.replace(/\.[^/.]+$/, '') === baseName + '_vi');
+        if (autoIdx === -1) autoIdx = filteredSubs.findIndex(f => f.name.replace(/\.[^/.]+$/, '') === baseName);
+        if (autoIdx === -1) autoIdx = 0;
+        select.selectedIndex = autoIdx;
+    }
+    // Load video và phụ đề phù hợp
+    function loadVideoAndSubtitle(videoFile, subFiles) {
+        const video = document.getElementById('video');
+        video.src = URL.createObjectURL(videoFile);
+        // Remove old tracks
+        while (video.firstChild) video.removeChild(video.firstChild);
+        const baseName = videoFile.name.replace(/\.[^/.]+$/, '');
+        // Ưu tiên phụ đề _vi, rồi cùng tên, rồi đầu tiên
+        let subFile = subFiles.find(f => f.name.replace(/\.[^/.]+$/, '') === baseName + '_vi')
+                  || subFiles.find(f => f.name.replace(/\.[^/.]+$/, '') === baseName)
+                  || subFiles[0];
+        if (subFile) {
+            loadSubtitle(subFile, videoFile.name);
+        } else {
+            document.getElementById('translateBtn').disabled = true;
+        }
+    }
+    // Khi chọn phụ đề từ dropdown
+    document.getElementById('subtitleSelect').addEventListener('change', function(e) {
+        const files = Array.from(document.getElementById('multiFile').files);
+        let subFiles = files.filter(f => f.name.match(/\.(vtt|srt|crt)$/i));
+        let idx = this.selectedIndex;
+        if (subFiles.length > 0 && idx >= 0) {
+            loadSubtitle(subFiles[idx]);
+        }
+    });
+    // Google Translate API miễn phí không public, thử dùng unofficial endpoint
+    async function translateSubtitleToVietnamese(vttText) {
+        // Tách từng đoạn subtitle
+        const lines = vttText.split(/\n/);
+        let output = [];
+        let buffer = [];
+        for (let line of lines) {
+            if (/^\d{2}:\d{2}:\d{2}\.\d{3}/.test(line) || line.trim() === '' || line.startsWith('WEBVTT')) {
+                if (buffer.length) {
+                    output.push(await translateText(buffer.join(' ')));
+                    buffer = [];
+                }
+                output.push(line);
+            } else {
+                buffer.push(line);
+            }
+        }
+        if (buffer.length) output.push(await translateText(buffer.join(' ')));
+        return output.join('\n');
+    }
+    async function translateText(text) {
+        // Sử dụng Google Translate unofficial endpoint
+        const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=vi&dt=t&q=' + encodeURIComponent(text);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            return data[0].map(x => x[0]).join('');
+        } catch (e) {
+            return '[LỖI DỊCH] ' + text;
+        }
+    }
+    let translatedSubtitle = '';
+    let translatedSubtitleFilename = '';
+    document.getElementById('translateBtn').addEventListener('click', async function() {
+        if (!currentSubtitleText) return;
+        this.disabled = true;
+        this.textContent = 'Đang dịch...';
+        let translated = await translateSubtitleToVietnamese(currentSubtitleText);
+        translatedSubtitle = translated;
+        // Gợi ý tên file phụ đề đã dịch
+        const files = document.getElementById('multiFile').files;
+        let baseName = 'subtitle_translated';
+        if (files && files.length > 0) {
+            let videoFile = Array.from(files).find(f => f.name.match(/\.mp4$/i));
+            if (videoFile) {
+                baseName = videoFile.name.replace(/\.[^/.]+$/, '') + '_vi';
+            }
+        }
+        translatedSubtitleFilename = baseName + '.vtt';
+        const vttBlob = new Blob([translated], {type: 'text/vtt'});
+        const vttUrl = URL.createObjectURL(vttBlob);
+        const video = document.getElementById('video');
+        // Remove old tracks
+        const oldTracks = video.querySelectorAll('track');
+        oldTracks.forEach(t => t.remove());
+        const track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.label = 'Subtitle (VI)';
+        track.srclang = 'vi';
+        track.src = vttUrl;
+        track.default = true;
+        video.appendChild(track);
+        this.textContent = 'Dịch phụ đề sang tiếng Việt';
+        this.disabled = false;
+        document.getElementById('downloadSubBtn').disabled = false;
+        // Tải phụ đề đã dịch ngay sau khi dịch xong
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([translatedSubtitle], {type: 'text/vtt'}));
+        a.download = translatedSubtitleFilename || 'subtitle_vi.vtt';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 100);
+        alert('Đã dịch xong phụ đề sang tiếng Việt và đã tải về máy!');
+    });
+    // Nút tải phụ đề đã dịch
+    document.getElementById('downloadSubBtn').addEventListener('click', function() {
+        if (!translatedSubtitle) return;
+        const blob = new Blob([translatedSubtitle], {type: 'text/vtt'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = translatedSubtitleFilename || 'subtitle_vi.vtt';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+    });
+    // Nút tua video (fix chuẩn)
+    function seekVideo(seconds) {
+        const video = document.getElementById('video');
+        if (!video.duration || isNaN(video.duration)) return; // chưa tải xong
+        let newTime = video.currentTime + seconds;
+        if (newTime < 0) newTime = 0;
+        if (newTime > video.duration) newTime = video.duration;
+        const wasPaused = video.paused;
+        video.currentTime = newTime;
+        // Nếu trước đó đang phát thì tiếp tục phát
+        if (!wasPaused) {
+            video.play();
+        }
+    }
+    document.getElementById('rewindBtn').addEventListener('click', function() {
+        seekVideo(-10);
+    });
+    document.getElementById('forwardBtn').addEventListener('click', function() {
+        seekVideo(10);
+    });
+
+    // Play/Pause button functionality
+    document.getElementById('playPauseBtn').addEventListener('click', function() {
+        const video = document.getElementById('video');
+        if (video.paused) {
+            video.play();
+        } else {
+            video.pause();
+        }
+    });
+    </script>
+</body>
+</html>
